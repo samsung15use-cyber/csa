@@ -6,18 +6,25 @@ from telebot import types
 from datetime import datetime
 import random
 import string
+from dotenv import load_dotenv
+
+# ==================== ЗАГРУЗКА КОНФИГУРАЦИИ ИЗ ПЕРЕМЕННЫХ ОКРУЖЕНИЯ ====================
+load_dotenv()
 
 # ==================== КОНФИГУРАЦИЯ ====================
-BOT_TOKEN = "8495865415:AAHlUTXRynIkx9dHOzclHKc0G_sF4qZgffg"  # Ваш токен
-ADMIN_IDS = [1417003901]  # Ваш Telegram ID
-DB_NAME = "gifts_bot.db"
-bot = telebot.TeleBot(BOT_TOKEN)
+BOT_TOKEN = os.getenv("8495865415:AAHlUTXRynIkx9dHOzclHKc0G_sF4qZgffg")
+# Получаем ID администраторов из переменной окружения (можно передать строку с несколькими ID, разделенными запятыми)
+ADMIN_IDS_STR = os.getenv("ADMIN_IDS",1417003901 "")
+ADMIN_IDS = [int(id.strip()) for id in ADMIN_IDS_STR.split(",") if id.strip()]
+
+DB_NAME = os.getenv("DB_NAME", "gifts_bot.db")
 
 # ==================== НАСТРОЙКИ РЕФЕРАЛЬНОЙ СИСТЕМЫ ====================
-REFERRAL_BONUS = 5  # Бонус за приглашенного друга (в звёздах)
-REFERRAL_PERCENT = 5  # Процент от трат рефералов
+REFERRAL_BONUS = int(os.getenv("REFERRAL_BONUS", 5))
+REFERRAL_PERCENT = int(os.getenv("REFERRAL_PERCENT", 5))
 
 # ==================== ТОВАРЫ (ПОДАРКИ) С ЭМОДЗИ ====================
+# Товары можно также вынести в .env, но для простоты оставим здесь.
 GIFTS = {
     "🎁 Подарок": 22,
     "🌹 Роза": 22,
@@ -36,17 +43,25 @@ GIFTS = {
     "💖 Сердце": 13
 }
 
+# Проверяем, что токен загружен
+if not BOT_TOKEN:
+    raise ValueError("Не задан BOT_TOKEN в файле .env")
+
+bot = telebot.TeleBot(BOT_TOKEN)
+
 # ==================== ИНИЦИАЛИЗАЦИЯ БАЗЫ ДАННЫХ ====================
 def init_database():
-    if os.path.exists(DB_NAME):
-        os.remove(DB_NAME)
-        print("🗑️ Старая база данных удалена")
+    """Инициализирует базу данных, создавая все необходимые таблицы."""
+    # Если нужно пересоздать БД при каждом запуске (для разработки), можно раскомментировать:
+    # if os.path.exists(DB_NAME):
+    #     os.remove(DB_NAME)
+    #     print("🗑️ Старая база данных удалена")
     
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
     cursor.execute('''
-    CREATE TABLE users (
+    CREATE TABLE IF NOT EXISTS users (
         user_id INTEGER PRIMARY KEY,
         username TEXT,
         first_name TEXT,
@@ -64,7 +79,7 @@ def init_database():
     ''')
     
     cursor.execute('''
-    CREATE TABLE sponsors (
+    CREATE TABLE IF NOT EXISTS sponsors (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         name TEXT NOT NULL,
         link TEXT NOT NULL,
@@ -74,7 +89,7 @@ def init_database():
     ''')
     
     cursor.execute('''
-    CREATE TABLE referrals (
+    CREATE TABLE IF NOT EXISTS referrals (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         referral_id INTEGER,
@@ -84,7 +99,7 @@ def init_database():
     ''')
     
     cursor.execute('''
-    CREATE TABLE transactions (
+    CREATE TABLE IF NOT EXISTS transactions (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
         user_id INTEGER,
         amount REAL,
@@ -96,7 +111,7 @@ def init_database():
     ''')
     
     cursor.execute('''
-    CREATE TABLE temp_mailing (
+    CREATE TABLE IF NOT EXISTS temp_mailing (
         admin_id INTEGER PRIMARY KEY,
         text TEXT
     )
@@ -104,10 +119,11 @@ def init_database():
     
     conn.commit()
     conn.close()
-    print("✅ Новая база данных создана")
+    print("✅ База данных готова (таблицы созданы или уже существуют)")
 
 # ==================== РАБОТА СО СПОНСОРАМИ ====================
 def get_sponsors():
+    """Возвращает список всех спонсоров."""
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -115,10 +131,12 @@ def get_sponsors():
         sponsors = cursor.fetchall()
         conn.close()
         return [{"name": s[0], "link": s[1], "chat_id": s[2]} for s in sponsors]
-    except:
+    except Exception as e:
+        print(f"Ошибка получения спонсоров: {e}")
         return []
 
 def add_sponsor(name, link, chat_id):
+    """Добавляет нового спонсора."""
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -129,10 +147,12 @@ def add_sponsor(name, link, chat_id):
         conn.commit()
         conn.close()
         return True
-    except:
+    except Exception as e:
+        print(f"Ошибка добавления спонсора: {e}")
         return False
 
 def delete_sponsor(chat_id):
+    """Удаляет спонсора по chat_id."""
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -140,11 +160,13 @@ def delete_sponsor(chat_id):
         conn.commit()
         conn.close()
         return True
-    except:
+    except Exception as e:
+        print(f"Ошибка удаления спонсора: {e}")
         return False
 
 # ==================== РАБОТА С ПОЛЬЗОВАТЕЛЯМИ ====================
 def get_user(user_id):
+    """Возвращает данные пользователя по его ID."""
     try:
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -152,11 +174,12 @@ def get_user(user_id):
         user = cursor.fetchone()
         conn.close()
         return user
-    except:
+    except Exception as e:
+        print(f"Ошибка получения пользователя: {e}")
         return None
 
 def generate_unique_code():
-    """Генерирует уникальный код для реферальной ссылки"""
+    """Генерирует уникальный код для реферальной ссылки."""
     while True:
         code = ''.join(random.choices(string.ascii_letters + string.digits, k=8))
         conn = sqlite3.connect(DB_NAME)
@@ -168,6 +191,7 @@ def generate_unique_code():
             return code
 
 def register_user(message):
+    """Регистрирует нового пользователя или обновляет данные существующего."""
     try:
         user_id = message.from_user.id
         username = message.from_user.username or ""
@@ -180,12 +204,10 @@ def register_user(message):
         user = cursor.fetchone()
         
         if not user:
-            # Генерируем уникальный код и реферальную ссылку
             referral_code = generate_unique_code()
             bot_username = bot.get_me().username
             invite_link = f"https://t.me/{bot_username}?start={referral_code}"
             
-            # Проверяем, пришел ли пользователь по реферальной ссылке
             referrer_id = None
             if message.text and message.text.startswith('/start '):
                 ref_code = message.text[7:]
@@ -206,7 +228,6 @@ def register_user(message):
             ))
             
             if referrer_id:
-                # Начисляем бонус пригласившему
                 cursor.execute('''
                 UPDATE users 
                 SET balance = balance + ?, 
@@ -215,13 +236,11 @@ def register_user(message):
                 WHERE user_id = ?
                 ''', (REFERRAL_BONUS, REFERRAL_BONUS, referrer_id))
                 
-                # Записываем в историю рефералов
                 cursor.execute('''
                 INSERT INTO referrals (user_id, referral_id, date, earnings)
                 VALUES (?, ?, ?, ?)
                 ''', (referrer_id, user_id, datetime.now().strftime("%Y-%m-%d %H:%M:%S"), REFERRAL_BONUS))
                 
-                # Отправляем уведомление пригласившему
                 try:
                     bot.send_message(
                         referrer_id,
@@ -229,8 +248,8 @@ def register_user(message):
                         f"👤 {first_name or username or 'Пользователь'}\n"
                         f"💰 Начислено: +{REFERRAL_BONUS} ⭐"
                     )
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Не удалось отправить уведомление рефереру: {e}")
                 
                 print(f"✅ Реферал зарегистрирован: {user_id} приглашен {referrer_id}")
             
@@ -244,6 +263,11 @@ def register_user(message):
 
 # ==================== ПРОВЕРКА ПОДПИСКИ ====================
 def check_subscription(user_id):
+    """
+    Проверяет, подписан ли пользователь на всех спонсоров.
+    Возвращает (True, []) если подписан на всех,
+    иначе (False, список неотмеченных спонсоров).
+    """
     sponsors = get_sponsors()
     if not sponsors:
         return True, []
@@ -253,9 +277,7 @@ def check_subscription(user_id):
         for sponsor in sponsors:
             try:
                 chat_id = sponsor['chat_id']
-                # Преобразуем @username в числовой ID если нужно
                 if str(chat_id).startswith('@'):
-                    # Пытаемся получить информацию о чате
                     chat = bot.get_chat(chat_id)
                     chat_id = chat.id
                 
@@ -264,7 +286,6 @@ def check_subscription(user_id):
                     not_subscribed.append(sponsor)
             except Exception as e:
                 print(f"Ошибка проверки подписки на {sponsor['name']}: {e}")
-                # Если не можем проверить, считаем что пользователь не подписан
                 not_subscribed.append(sponsor)
         
         return len(not_subscribed) == 0, not_subscribed
@@ -274,10 +295,12 @@ def check_subscription(user_id):
 
 # ==================== ПРОВЕРКА АДМИНА ====================
 def check_admin_status(user_id):
+    """Проверяет, является ли пользователь администратором."""
     return user_id in ADMIN_IDS
 
 # ==================== ИНЛАЙН КЛАВИАТУРЫ ====================
 def main_menu_keyboard(user_id):
+    """Клавиатура главного меню."""
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     buttons = [
         types.InlineKeyboardButton("🎁 Подарки", callback_data="menu_gifts"),
@@ -285,7 +308,6 @@ def main_menu_keyboard(user_id):
         types.InlineKeyboardButton("👤 Профиль", callback_data="menu_profile"),
     ]
     
-    # Добавляем кнопку админки только для админов
     if check_admin_status(user_id):
         buttons.append(types.InlineKeyboardButton("⚙️ Админ панель", callback_data="menu_admin"))
     
@@ -293,6 +315,7 @@ def main_menu_keyboard(user_id):
     return keyboard
 
 def admin_menu_keyboard():
+    """Клавиатура админ-панели."""
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     buttons = [
         types.InlineKeyboardButton("📊 Статистика", callback_data="admin_stats"),
@@ -305,6 +328,7 @@ def admin_menu_keyboard():
     return keyboard
 
 def subscription_keyboard():
+    """Клавиатура для проверки подписки."""
     keyboard = types.InlineKeyboardMarkup(row_width=1)
     sponsors = get_sponsors()
     for sponsor in sponsors:
@@ -319,10 +343,10 @@ def subscription_keyboard():
     return keyboard
 
 def gifts_keyboard(user_balance):
+    """Клавиатура со списком подарков."""
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     row = []
     for i, (gift, price) in enumerate(GIFTS.items(), 1):
-        # Убрали галочки и крестики
         button = types.InlineKeyboardButton(
             text=f"{gift} - {price} ⭐", 
             callback_data=f"buy_{gift}"
@@ -337,6 +361,7 @@ def gifts_keyboard(user_balance):
     return keyboard
 
 def earn_keyboard():
+    """Клавиатура раздела заработка."""
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     buttons = [
         types.InlineKeyboardButton("📋 Скопировать ссылку", callback_data="copy_link"),
@@ -346,17 +371,23 @@ def earn_keyboard():
     keyboard.add(*buttons)
     return keyboard
 
-def back_keyboard():
+def back_keyboard(dest="main"):
+    """Универсальная кнопка 'Назад'."""
     keyboard = types.InlineKeyboardMarkup()
-    keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
+    if dest == "admin":
+        keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_admin"))
+    else:
+        keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
     return keyboard
 
 def back_to_earn_keyboard():
+    """Кнопка возврата к разделу заработка."""
     keyboard = types.InlineKeyboardMarkup()
     keyboard.add(types.InlineKeyboardButton("🔙 Назад к заработку", callback_data="menu_earn"))
     return keyboard
 
 def sponsors_management_keyboard():
+    """Клавиатура управления спонсорами."""
     keyboard = types.InlineKeyboardMarkup(row_width=2)
     buttons = [
         types.InlineKeyboardButton("➕ Добавить", callback_data="sponsor_add"),
@@ -374,7 +405,6 @@ def start_command(message):
         user_id = message.from_user.id
         register_user(message)
         
-        # Проверяем подписку
         is_subscribed, not_subscribed = check_subscription(user_id)
         
         if not is_subscribed:
@@ -399,7 +429,7 @@ def start_command(message):
             return
         
         welcome_text = (
-            "🎁 Добро пожаловать в Cassetov Stars!\n\n"
+            "🎁 Добро пожаловать в бот подарков!\n\n"
             "✨ Здесь ты можешь зарабатывать звезды\n"
             "👥 Приглашай друзей и получай бонусы\n"
             f"💫 Зарабатывай {REFERRAL_PERCENT}% от трат рефералов\n"
@@ -415,7 +445,6 @@ def ref_command(message):
     """Показать реферальную ссылку"""
     try:
         user_id = message.from_user.id
-        # Проверяем подписку
         is_subscribed, not_subscribed = check_subscription(user_id)
         
         if not is_subscribed:
@@ -484,8 +513,8 @@ def handle_callbacks(call):
                         parse_mode="Markdown",
                         reply_markup=keyboard
                     )
-                except:
-                    pass
+                except Exception as e:
+                    print(f"Ошибка редактирования сообщения: {e}")
                 return
         
         # ===== ГЛАВНОЕ МЕНЮ =====
@@ -569,9 +598,8 @@ def handle_callbacks(call):
         # ===== РЕФЕРАЛЬНЫЕ ФУНКЦИИ =====
         elif call.data == "copy_link":
             if user:
-                ref_link = user[11]  # invite_link
+                ref_link = user[11]
                 
-                # Отправляем ссылку отдельным сообщением с инструкцией по копированию
                 bot.send_message(
                     user_id,
                     f"🔗 **Твоя реферальная ссылка:**\n\n"
@@ -584,7 +612,6 @@ def handle_callbacks(call):
                     parse_mode="Markdown"
                 )
                 
-                # Добавляем кнопку для быстрой отправки друзьям
                 share_keyboard = types.InlineKeyboardMarkup()
                 share_keyboard.add(types.InlineKeyboardButton(
                     text="📤 Поделиться ссылкой",
@@ -681,7 +708,6 @@ def handle_callbacks(call):
             
             bot.answer_callback_query(call.id, f"✅ Покупка совершена!", show_alert=False)
             
-            # Отправляем сообщение о покупке и доставке
             delivery_text = (
                 f"🎁 **Покупка успешно оформлена!**\n\n"
                 f"Ты купил: {gift_name}\n"
@@ -697,7 +723,6 @@ def handle_callbacks(call):
                 parse_mode="Markdown"
             )
             
-            # Обновляем баланс и показываем подарки снова
             user = get_user(user_id)
             bot.edit_message_text(
                 f"🎁 **Доступные подарки**\n💰 Твой баланс: {user[3]} ⭐\n\nВыбери подарок для покупки:",
@@ -871,7 +896,6 @@ def handle_callbacks(call):
                 chat_id = call.data.replace("del_sponsor_", "")
                 if delete_sponsor(chat_id):
                     bot.answer_callback_query(call.id, "✅ Спонсор удален!", show_alert=True)
-                    # Обновляем список спонсоров
                     sponsors = get_sponsors()
                     text = "📢 **Управление спонсорами**\n\n"
                     if sponsors:
@@ -951,12 +975,10 @@ def process_mailing(message):
         admin_id = message.from_user.id
         text = message.text
         
-        # Сохраняем текст
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
         cursor.execute("INSERT OR REPLACE INTO temp_mailing (admin_id, text) VALUES (?, ?)", (admin_id, text))
         
-        # Получаем всех пользователей
         cursor.execute("SELECT user_id FROM users WHERE notifications = 1")
         users = cursor.fetchall()
         conn.close()
@@ -971,7 +993,8 @@ def process_mailing(message):
                 bot.send_message(user[0], text)
                 success += 1
                 time.sleep(0.05)
-            except:
+            except Exception as e:
+                print(f"Ошибка отправки пользователю {user[0]}: {e}")
                 failed += 1
         
         bot.send_message(
@@ -981,14 +1004,6 @@ def process_mailing(message):
         )
     except Exception as e:
         bot.send_message(admin_id, f"❌ Ошибка: {e}", reply_markup=admin_menu_keyboard())
-
-def back_keyboard(dest="main"):
-    keyboard = types.InlineKeyboardMarkup()
-    if dest == "admin":
-        keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_admin"))
-    else:
-        keyboard.add(types.InlineKeyboardButton("🔙 Назад", callback_data="back_to_main"))
-    return keyboard
 
 # ==================== ЗАПУСК БОТА ====================
 if __name__ == "__main__":
